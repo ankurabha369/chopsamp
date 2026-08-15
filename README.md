@@ -2,7 +2,7 @@
 
 <img src="Assets/banner.jpg" alt="ChopSamp by Ankur" width="300"/>
 
-ChopSamp
+# ChopSamp
 ### *Tactile Hardware-Inspired Sampler & Slicer Audio Plugin*
 
 
