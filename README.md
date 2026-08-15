@@ -5,7 +5,6 @@
 # 🎛️ ChopSamp
 ### *Tactile Hardware-Inspired Sampler & Slicer Audio Plugin*
 
-<img src="assets/chopsamp-logo.png" width="300" alt="ChopSamp Logo">
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![JUCE Framework](https://img.shields.io/badge/JUCE-v8.0.4-orange.svg)](https://juce.com/)
@@ -21,7 +20,7 @@
 
 <br/>
 
-<img src="Assets/screenshot.png" alt="ChopSamp Interface Screenshot" width="100%"/>
+
 
 </div>
 
@@ -30,7 +29,8 @@
 ## 🎨 User Interface
 
 <div align="center">
-  <img src="assets/chopsamp-ui.png" width="100%" alt="ChopSamp UI Screenshot">
+  <img src="Assets/screenshot.png" alt="ChopSamp Interface Screenshot" width="100%"/>
+  
 </div>
 
 ---
