@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="Assets/banner.jpg" alt="ChopSamp by Ankur" width="300"/>
+
 # 🎛️ ChopSamp
 ### *Tactile Hardware-Inspired Sampler & Slicer Audio Plugin*
 
@@ -16,6 +18,10 @@
 <br/>
 
 > **ChopSamp** is an open-source, retro hardware-inspired audio sampler and slicer plugin (VST3 / Standalone 64-Bit). It bridges the tactile workflow of iconic hardware grooveboxes (MPC, Digitakt, SP-[...]
+
+<br/>
+
+<img src="Assets/screenshot.png" alt="ChopSamp Interface Screenshot" width="100%"/>
 
 </div>
 
@@ -58,7 +64,7 @@
 ## 📥 Installation
 
 ### Windows (VST3 & Standalone)
-1. Download the latest binary release from the [Releases](https://github.com/) page.
+1. Download the latest binary release from the [Releases](https://github.com/ankurabha369/chopsamp/releases) page.
 2. Copy `ChopSamp.vst3` into your system's VST3 directory:
    ```
    C:\Program Files\Common Files\VST3\
@@ -78,7 +84,7 @@
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/chopsamp.git
+   git clone https://github.com/ankurabha369/chopsamp.git
    cd chopsamp
    ```
 
