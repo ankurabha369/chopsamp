@@ -21,6 +21,14 @@
 
 ---
 
+## 🎨 User Interface
+
+<div align="center">
+  <img src="assets/chopsamp-ui.png" width="100%" alt="ChopSamp UI Screenshot">
+</div>
+
+---
+
 ## ⚡ Features at a Glance
 
 - **🎯 Zero-Crossing Snapped Slicing**:
