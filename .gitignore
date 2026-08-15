@@ -1,0 +1,28 @@
+# Build directories
+build/
+bin/
+out/
+Release/
+Debug/
+x64/
+x86/
+
+# IDE & Tooling
+.vs/
+.vscode/
+*.vcxproj.user
+*.suo
+*.user
+*.opendb
+*.db
+
+# OS & Temporary files
+*.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+
+# AI / System logs
+.gemini/
+.agents/
