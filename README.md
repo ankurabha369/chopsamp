@@ -107,7 +107,7 @@
 ## 📖 Documentation
 
 - Full Reference Manual: [USER_MANUAL.md](USER_MANUAL.md)
-- Video Showcase & Tutorial Script: [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md)
+
 
 ---
 
