@@ -4,9 +4,23 @@
 SliceControlsComponent::SliceControlsComponent(ChopSampAudioProcessor& p)
     : audioProcessor(p)
 {
-    setupSlider(crossfadeSlider, crossfadeLabel, "XFade"); crossfadeSlider.setRange(1.0, 100.0, 1.0); crossfadeSlider.setValue(20.0); crossfadeSlider.setDoubleClickReturnValue(true, 20.0);
-    setupSlider(startTrimSlider, startTrimLabel, "Start"); startTrimSlider.setRange(-2000.0, 2000.0, 1.0); startTrimSlider.setValue(0.0); startTrimSlider.setDoubleClickReturnValue(true, 0.0);
-    setupSlider(endTrimSlider, endTrimLabel, "End"); endTrimSlider.setRange(-2000.0, 2000.0, 1.0); endTrimSlider.setValue(0.0); endTrimSlider.setDoubleClickReturnValue(true, 0.0);
+    setupSlider(crossfadeSlider, crossfadeLabel, "XFade");
+    crossfadeSlider.setRange(1.0, 100.0, 1.0);
+    crossfadeSlider.setValue(20.0);
+    crossfadeSlider.setDoubleClickReturnValue(true, 20.0);
+    crossfadeSlider.textFromValueFunction = [](double v) { return juce::String((int)v) + "ms"; };
+
+    setupSlider(startTrimSlider, startTrimLabel, "Start");
+    startTrimSlider.setRange(-2000.0, 2000.0, 1.0);
+    startTrimSlider.setValue(0.0);
+    startTrimSlider.setDoubleClickReturnValue(true, 0.0);
+    startTrimSlider.textFromValueFunction = [](double v) { return (v > 0 ? "+" : "") + juce::String((int)v) + "ms"; };
+
+    setupSlider(endTrimSlider, endTrimLabel, "End");
+    endTrimSlider.setRange(-2000.0, 2000.0, 1.0);
+    endTrimSlider.setValue(0.0);
+    endTrimSlider.setDoubleClickReturnValue(true, 0.0);
+    endTrimSlider.textFromValueFunction = [](double v) { return (v > 0 ? "+" : "") + juce::String((int)v) + "ms"; };
 
     setupSlider(volSlider, volLabel, "Vol"); volSlider.setRange(0.0, 2.0, 0.01); volSlider.setValue(1.0); volSlider.setDoubleClickReturnValue(true, 1.0);
     setupSlider(panSlider, panLabel, "Pan"); panSlider.setRange(-1.0, 1.0, 0.01); panSlider.setValue(0.0); panSlider.setDoubleClickReturnValue(true, 0.0);

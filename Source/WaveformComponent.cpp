@@ -546,7 +546,8 @@ void WaveformComponent::mouseDrag(const juce::MouseEvent &e) {
 
     int newPos = xToSample(e.getPosition().x, numSamples,
                            waveformArea.getWidth(), waveformArea.getX());
-    newPos = juce::jlimit(0, numSamples - 1, newPos);
+    int zcPos = audioProcessor.findNearestZeroCrossing(audioProcessor.currentTab, newPos);
+    zcPos = juce::jlimit(0, numSamples - 1, zcPos);
 
     int minPos = sample.markers[draggingMarkerIndex - 1].sampleIndex + 1;
     int maxPos = (draggingMarkerIndex < sample.markers.size() - 1)
@@ -554,7 +555,7 @@ void WaveformComponent::mouseDrag(const juce::MouseEvent &e) {
                      : sample.buffer.getNumSamples() - 1;
 
     sample.markers[draggingMarkerIndex].sampleIndex =
-        juce::jlimit(minPos, maxPos, newPos);
+        juce::jlimit(minPos, maxPos, zcPos);
     repaint();
   }
 }
@@ -571,8 +572,9 @@ void WaveformComponent::mouseDoubleClick(const juce::MouseEvent &e) {
     auto &sample = audioProcessor.samples[audioProcessor.currentTab];
     if (sample.isLoaded) {
       int numSamples = sample.buffer.getNumSamples();
-      int samplePos = xToSample(e.getPosition().x, numSamples,
-                                waveformArea.getWidth(), waveformArea.getX());
+      int rawSamplePos = xToSample(e.getPosition().x, numSamples,
+                                   waveformArea.getWidth(), waveformArea.getX());
+      int samplePos = audioProcessor.findNearestZeroCrossing(audioProcessor.currentTab, rawSamplePos);
 
       int clickedMarker = -1;
       for (int i = 0; i < sample.markers.size(); ++i) {

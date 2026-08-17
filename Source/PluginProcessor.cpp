@@ -423,6 +423,7 @@ void ChopSampAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
+    juce::ignoreUnused (totalNumInputChannels);
 
     // 1. Capture incoming audio if recording is active BEFORE clearing output buffer
     if (isRecording.load())
@@ -459,148 +460,194 @@ void ChopSampAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
 
     keyboardState.processNextMidiBuffer(midiMessages, 0, buffer.getNumSamples(), true);
 
-    // MIDI processing for Pitch Wheel, Mod Wheel, and "White Keys Only" mapping
-    for (const auto metadata : midiMessages)
+    const int numSamples = buffer.getNumSamples();
+    const double dawSr = getSampleRate() > 0 ? getSampleRate() : 44100.0;
+    const int baseRoot = rootNote.load();
+    const bool isWhiteOnly = whiteKeysOnly.load();
+
+    auto midiIt = midiMessages.cbegin();
+    auto midiEnd = midiMessages.cend();
+
+    // Try locking sample mutex; if locked by UI (loading file / auto chop), silence gracefully to avoid audio thread stalls
+    const juce::ScopedTryLock sl(sampleLock);
+    if (!sl.isLocked())
+        return;
+
+    int activeTab = currentTab.load();
+    if (activeTab < 0 || activeTab >= MAX_SAMPLE_TABS)
+        return;
+
+    auto& activeSample = samples[activeTab];
+
+    for (int s = 0; s < numSamples; ++s)
     {
-        auto message = metadata.getMessage();
-        if (message.isPitchWheel())
+        // 1. Process all MIDI messages that occur at or before sample 's'
+        while (midiIt != midiEnd && (*midiIt).samplePosition <= s)
         {
-            int pw = message.getPitchWheelValue();
-            currentPitchBendSemi = ((float)pw - 8192.0f) / 8192.0f * pitchBendRangeSemi.load();
-        }
-        else if (message.isController() && message.getControllerNumber() == 1)
-        {
-            int ccVal = message.getControllerValue();
-            modWheelCutoffHz = juce::jmap((float)ccVal, 0.0f, 127.0f, 200.0f, 20000.0f);
-        }
-        else if (message.isNoteOn() || message.isNoteOff())
-        {
-            int note = message.getNoteNumber();
-            int sliceIndex = -1;
-            int baseRoot = rootNote.load();
-            
-            if (whiteKeysOnly)
+            auto message = (*midiIt).getMessage();
+            if (message.isPitchWheel())
             {
-                int octave = note / 12;
-                int pitchClass = note % 12;
-                int indexInOctave = -1;
-                switch(pitchClass) {
-                    case 0: indexInOctave = 0; break;
-                    case 2: indexInOctave = 1; break;
-                    case 4: indexInOctave = 2; break;
-                    case 5: indexInOctave = 3; break;
-                    case 7: indexInOctave = 4; break;
-                    case 9: indexInOctave = 5; break;
-                    case 11: indexInOctave = 6; break;
-                }
-                if (indexInOctave != -1) {
-                    int rootOctave = baseRoot / 12;
-                    sliceIndex = (octave - rootOctave) * 7 + indexInOctave;
-                }
+                int pw = message.getPitchWheelValue();
+                currentPitchBendSemi = ((float)pw - 8192.0f) / 8192.0f * pitchBendRangeSemi.load();
             }
-            else
+            else if (message.isController() && message.getControllerNumber() == 1)
             {
-                sliceIndex = note - baseRoot;
+                int ccVal = message.getControllerValue();
+                modWheelCutoffHz = juce::jmap((float)ccVal, 0.0f, 127.0f, 200.0f, 20000.0f);
             }
-            
-            if (sliceIndex >= 0)
+            else if (message.isNoteOn())
             {
-                if (message.isNoteOn() && sliceIndex < samples[currentTab].markers.size())
+                int note = message.getNoteNumber();
+                int sliceIndex = -1;
+
+                if (isWhiteOnly)
                 {
-                    // Monophonic choke group: choke all active voices on this tab with smooth crossfade
-                    for(auto& v : voices) {
-                        if (v.isActive && v.tabIndex == currentTab && !v.isChoked) {
+                    int octave = note / 12;
+                    int pitchClass = note % 12;
+                    int indexInOctave = -1;
+                    switch(pitchClass) {
+                        case 0: indexInOctave = 0; break;
+                        case 2: indexInOctave = 1; break;
+                        case 4: indexInOctave = 2; break;
+                        case 5: indexInOctave = 3; break;
+                        case 7: indexInOctave = 4; break;
+                        case 9: indexInOctave = 5; break;
+                        case 11: indexInOctave = 6; break;
+                    }
+                    if (indexInOctave != -1) {
+                        int rootOctave = baseRoot / 12;
+                        sliceIndex = (octave - rootOctave) * 7 + indexInOctave;
+                    }
+                }
+                else
+                {
+                    sliceIndex = note - baseRoot;
+                }
+
+                if (sliceIndex >= 0 && activeSample.isLoaded && sliceIndex < (int)activeSample.markers.size())
+                {
+                    auto& sp = activeSample.markers[sliceIndex].params;
+                    float xfadeMs = juce::jmax(2.0f, sp.crossfadeMs);
+                    float chokeSamples = juce::jmax(32.0f, (float)(dawSr * (xfadeMs * 0.001f)));
+
+                    // Monophonic choke group: smoothly fade out all currently active voices on this tab
+                    for (auto& v : voices) {
+                        if (v.isActive && v.tabIndex == activeTab) {
                             v.isChoked = true;
-                            float crossfadeMs = samples[currentTab].markers[sliceIndex].params.crossfadeMs;
-                            float sr = getSampleRate() > 0 ? getSampleRate() : 44100.0f;
-                            v.chokeStep = 1.0f / (juce::jmax(5.0f, crossfadeMs) * 0.001f * sr);
+                            v.chokeTotalSamples = chokeSamples;
+                            v.chokeElapsedSamples = 0.0f;
+                            // Start choke fade-out from its current effective gain for continuous smooth transition
+                            v.chokeStartGain = juce::jlimit(0.001f, 1.0f, v.currentEffectiveGain);
                         }
                     }
 
-                    // Start Voice
-                    auto& sp = samples[currentTab].markers[sliceIndex].params;
-                    double dawSr = getSampleRate() > 0 ? getSampleRate() : 44100.0;
-                    int startOffsetSamples = (int)(sp.startTrimMs * 0.001 * dawSr);
-                    int sliceStart = juce::jlimit(0, samples[currentTab].buffer.getNumSamples() - 1, samples[currentTab].markers[sliceIndex].sampleIndex + startOffsetSamples);
-                    
-                    for(auto& v : voices) {
-                        if(!v.isActive) {
-                            v.isActive = true;
-                            v.isChoked = false;
-                            v.chokeVol = 1.0f;
-                            v.note = note;
-                            v.tabIndex = currentTab;
-                            v.sliceIndex = sliceIndex;
-                            v.currentPosition = sliceStart;
-                            v.lastLpf = -1.0f;
-                            v.lastHpf = -1.0f;
-                            
-                            double fileSr = samples[currentTab].sampleRate > 0 ? samples[currentTab].sampleRate : dawSr;
-                            double sampleRateRatio = fileSr / dawSr;
-                            v.pitchRatio = sampleRateRatio * std::pow(2.0, (sp.pitchSemi + currentPitchBendSemi.load()) / 12.0);
-                            
-                            v.lpfL.reset();
-                            v.lpfR.reset();
-                            v.hpfL.reset();
-                            v.hpfR.reset();
-
-                            float lpfCutoff = juce::jmin(sp.lpfCutoff, modWheelCutoffHz.load());
-                            lpfCutoff = juce::jlimit(20.0f, 20000.0f, lpfCutoff);
-                            v.lpfL.setCoefficients(juce::IIRCoefficients::makeLowPass(dawSr, lpfCutoff));
-                            v.lpfR.setCoefficients(juce::IIRCoefficients::makeLowPass(dawSr, lpfCutoff));
-                            v.lastLpf = lpfCutoff;
-
-                            float hpfCutoff = juce::jlimit(20.0f, 10000.0f, sp.hpfCutoff);
-                            v.hpfL.setCoefficients(juce::IIRCoefficients::makeHighPass(dawSr, hpfCutoff));
-                            v.hpfR.setCoefficients(juce::IIRCoefficients::makeHighPass(dawSr, hpfCutoff));
-                            v.lastHpf = hpfCutoff;
-
-                            juce::ADSR::Parameters p;
-                            p.attack = juce::jmax(0.002f, sp.attackMs / 1000.0f);
-                            p.decay = sp.decayMs / 1000.0f;
-                            p.sustain = sp.sustainLevel;
-                            p.release = juce::jmax(0.005f, sp.releaseMs / 1000.0f);
-                            v.adsr.setParameters(p);
-                            v.adsr.noteOn();
-                            
+                    // Voice allocation & stealing
+                    ChopSampVoice* voiceToUse = nullptr;
+                    for (auto& v : voices) {
+                        if (!v.isActive) {
+                            voiceToUse = &v;
                             break;
                         }
                     }
-                }
-                else if (message.isNoteOff())
-                {
-                    for(auto& v : voices) {
-                        if(v.isActive && v.note == note && !v.isChoked) {
-                            v.adsr.noteOff();
+
+                    // If all 16 voices are busy, steal the voice with lowest remaining volume / furthest choke progress
+                    if (voiceToUse == nullptr) {
+                        float lowestGain = 999.0f;
+                        for (auto& v : voices) {
+                            float currentGain = v.currentEffectiveGain;
+                            if (currentGain < lowestGain) {
+                                lowestGain = currentGain;
+                                voiceToUse = &v;
+                            }
                         }
+                    }
+                    if (voiceToUse == nullptr) voiceToUse = &voices[0];
+
+                    int startOffsetSamples = (int)(sp.startTrimMs * 0.001 * dawSr);
+                    int sliceStart = juce::jlimit(0, activeSample.buffer.getNumSamples() - 1,
+                                                 activeSample.markers[sliceIndex].sampleIndex + startOffsetSamples);
+
+                    voiceToUse->isActive = true;
+                    voiceToUse->isChoked = false;
+                    voiceToUse->chokeStartGain = 1.0f;
+                    voiceToUse->chokeTotalSamples = chokeSamples;
+                    voiceToUse->chokeElapsedSamples = 0.0f;
+                    voiceToUse->fadeInTotalSamples = chokeSamples;
+                    voiceToUse->fadeInElapsedSamples = 0.0f;
+                    voiceToUse->currentEffectiveGain = 1.0f;
+                    voiceToUse->note = note;
+                    voiceToUse->tabIndex = activeTab;
+                    voiceToUse->sliceIndex = sliceIndex;
+                    voiceToUse->currentPosition = sliceStart;
+                    voiceToUse->lastLpf = -1.0f;
+                    voiceToUse->lastHpf = -1.0f;
+
+                    double fileSr = activeSample.sampleRate > 0 ? activeSample.sampleRate : dawSr;
+                    double sampleRateRatio = fileSr / dawSr;
+                    voiceToUse->pitchRatio = sampleRateRatio * std::pow(2.0, (sp.pitchSemi + currentPitchBendSemi.load()) / 12.0);
+
+                    voiceToUse->lpfL.reset();
+                    voiceToUse->lpfR.reset();
+                    voiceToUse->hpfL.reset();
+                    voiceToUse->hpfR.reset();
+
+                    float lpfCutoff = juce::jmin(sp.lpfCutoff, modWheelCutoffHz.load());
+                    lpfCutoff = juce::jlimit(20.0f, 20000.0f, lpfCutoff);
+                    voiceToUse->lpfL.setCoefficients(juce::IIRCoefficients::makeLowPass(dawSr, lpfCutoff));
+                    voiceToUse->lpfR.setCoefficients(juce::IIRCoefficients::makeLowPass(dawSr, lpfCutoff));
+                    voiceToUse->lastLpf = lpfCutoff;
+
+                    float hpfCutoff = juce::jlimit(20.0f, 10000.0f, sp.hpfCutoff);
+                    voiceToUse->hpfL.setCoefficients(juce::IIRCoefficients::makeHighPass(dawSr, hpfCutoff));
+                    voiceToUse->hpfR.setCoefficients(juce::IIRCoefficients::makeHighPass(dawSr, hpfCutoff));
+                    voiceToUse->lastHpf = hpfCutoff;
+
+                    juce::ADSR::Parameters p;
+                    p.attack = juce::jmax(0.002f, sp.attackMs / 1000.0f);
+                    p.decay = sp.decayMs / 1000.0f;
+                    p.sustain = sp.sustainLevel;
+                    p.release = juce::jmax(0.005f, sp.releaseMs / 1000.0f);
+                    voiceToUse->adsr.reset();
+                    voiceToUse->adsr.setParameters(p);
+                    voiceToUse->adsr.noteOn();
+                }
+            }
+            else if (message.isNoteOff())
+            {
+                int note = message.getNoteNumber();
+                for (auto& v : voices) {
+                    if (v.isActive && v.note == note && !v.isChoked) {
+                        v.adsr.noteOff();
                     }
                 }
             }
+            ++midiIt;
         }
-    }
 
-    // Audio Playback Engine
-    for (auto& v : voices)
-    {
-        if (v.isActive)
+        // 2. Synthesizer Voice Rendering for Sample 's'
+        for (auto& v : voices)
         {
+            if (!v.isActive) continue;
+
             if (v.tabIndex < 0 || v.tabIndex >= MAX_SAMPLE_TABS) {
-                v.isActive = false; continue;
+                v.isActive = false;
+                continue;
             }
+
             auto& sample = samples[v.tabIndex];
             int numSamps = sample.buffer.getNumSamples();
             int numChans = sample.buffer.getNumChannels();
             if (!sample.isLoaded || numSamps <= 0 || numChans <= 0 ||
                 v.sliceIndex < 0 || v.sliceIndex >= (int)sample.markers.size()) {
-                v.isActive = false; continue;
+                v.isActive = false;
+                continue;
             }
-            
+
             auto& params = sample.markers[v.sliceIndex].params;
-            double dawSr = getSampleRate() > 0 ? getSampleRate() : 44100.0;
             int rawSliceStart = sample.markers[v.sliceIndex].sampleIndex;
-            int rawSliceEnd = (v.sliceIndex + 1 < (int)sample.markers.size()) ? 
-                sample.markers[v.sliceIndex+1].sampleIndex : numSamps;
-            
+            int rawSliceEnd = (v.sliceIndex + 1 < (int)sample.markers.size()) ?
+                sample.markers[v.sliceIndex + 1].sampleIndex : numSamps;
+
             int startOffsetSamples = (int)(params.startTrimMs * 0.001 * dawSr);
             int endOffsetSamples = (int)(params.endTrimMs * 0.001 * dawSr);
 
@@ -635,82 +682,113 @@ void ChopSampAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
             const float* lPtr = sample.buffer.getReadPointer(0);
             const float* rPtr = (numChans > 1) ? sample.buffer.getReadPointer(1) : lPtr;
 
-            for (int s = 0; s < buffer.getNumSamples(); ++s)
-            {
-                float env = v.adsr.getNextSample();
-                if (!v.adsr.isActive()) {
+            // ADSR envelope calculation
+            float env = v.adsr.getNextSample();
+            if (!v.adsr.isActive()) {
+                v.isActive = false;
+                continue;
+            }
+
+            // Choke fade-out (equal-power cosine curve)
+            float chokeFade = 1.0f;
+            if (v.isChoked) {
+                if (v.chokeElapsedSamples >= v.chokeTotalSamples) {
                     v.isActive = false;
-                    break;
+                    continue;
                 }
-                
-                if (v.isChoked) {
-                    v.chokeVol -= v.chokeStep;
-                    if (v.chokeVol <= 0.0f) {
-                        v.isActive = false;
-                        break;
-                    }
-                    env *= v.chokeVol;
+                float t = v.chokeElapsedSamples / v.chokeTotalSamples;
+                chokeFade = v.chokeStartGain * std::cos(t * juce::MathConstants<float>::halfPi);
+                v.chokeElapsedSamples += 1.0f;
+            }
+
+            // Crossfade fade-in for incoming voice (equal-power sine curve)
+            float crossFadeIn = 1.0f;
+            if (v.fadeInElapsedSamples < v.fadeInTotalSamples) {
+                float t = v.fadeInElapsedSamples / v.fadeInTotalSamples;
+                crossFadeIn = std::sin(t * juce::MathConstants<float>::halfPi);
+                v.fadeInElapsedSamples += 1.0f;
+            }
+
+            // Automatic Reaper-style micro-fades at slice boundaries (de-clicking)
+            float boundaryFade = 1.0f;
+            const float declickSamples = juce::jlimit(32.0f, (float)(dawSr * 0.01), (float)(dawSr * (params.crossfadeMs * 0.001f)));
+
+            double pos = v.currentPosition;
+            if (params.reverse) {
+                int anchor = playThroughMode ? numSamps : sliceEnd;
+                double offset = v.currentPosition - (double)rawSliceStart;
+                pos = (double)anchor - 1.0 - offset;
+
+                // Start fade for reverse playback
+                double distFromRevStart = v.currentPosition - (double)rawSliceStart;
+                if (distFromRevStart >= 0.0 && distFromRevStart < declickSamples) {
+                    float t = (float)(distFromRevStart / declickSamples);
+                    boundaryFade *= std::sin(juce::jlimit(0.0f, 1.0f, t) * juce::MathConstants<float>::halfPi);
                 }
 
-                float boundaryFade = 1.0f;
+                // End fade for reverse playback (approaching sliceStart)
+                if (!playThroughMode) {
+                    double distToStart = pos - (double)sliceStart;
+                    if (distToStart <= 0.0) {
+                        v.isActive = false;
+                        continue;
+                    } else if (distToStart < declickSamples) {
+                        float t = (float)(distToStart / declickSamples);
+                        boundaryFade *= std::sin(juce::jlimit(0.0f, 1.0f, t) * juce::MathConstants<float>::halfPi);
+                    }
+                }
+            } else {
+                // Forward playback
+                // Start fade for forward playback (de-click start)
+                double distFromStart = v.currentPosition - (double)sliceStart;
+                if (distFromStart >= 0.0 && distFromStart < declickSamples) {
+                    float t = (float)(distFromStart / declickSamples);
+                    boundaryFade *= std::sin(juce::jlimit(0.0f, 1.0f, t) * juce::MathConstants<float>::halfPi);
+                }
+
+                // End fade for forward playback (approaching sliceEnd)
                 if (!playThroughMode) {
                     double distToEnd = (double)sliceEnd - v.currentPosition;
                     if (distToEnd <= 0.0) {
                         v.isActive = false;
-                        break;
-                    } else if (distToEnd < 64.0) {
-                        boundaryFade = (float)(distToEnd / 64.0);
+                        continue;
+                    } else if (distToEnd < declickSamples) {
+                        float t = (float)(distToEnd / declickSamples);
+                        boundaryFade *= std::sin(juce::jlimit(0.0f, 1.0f, t) * juce::MathConstants<float>::halfPi);
                     }
                 }
-
-                double pos = v.currentPosition;
-                if (params.reverse) {
-                    int anchor = playThroughMode ? numSamps : sliceEnd;
-                    double offset = v.currentPosition - (double)rawSliceStart;
-                    pos = (double)anchor - 1.0 - offset;
-                    if (!playThroughMode) {
-                        double distToStart = pos - (double)sliceStart;
-                        if (distToStart <= 0.0) {
-                            v.isActive = false;
-                            break;
-                        } else if (distToStart < 64.0) {
-                            boundaryFade = (float)(distToStart / 64.0);
-                        }
-                    }
-                }
-                
-                if (pos >= 0.0 && pos < (double)(numSamps - 1))
-                {
-                    int p1 = (int)pos;
-                    int p2 = p1 + 1;
-                    float frac = (float)(pos - (double)p1);
-
-                    float leftVal = lPtr[p1] + frac * (lPtr[p2] - lPtr[p1]);
-                    float rightVal = rPtr[p1] + frac * (rPtr[p2] - rPtr[p1]);
-
-                    if (targetLpf < 19500.0f) {
-                        leftVal = v.lpfL.processSingleSampleRaw(leftVal);
-                        rightVal = v.lpfR.processSingleSampleRaw(rightVal);
-                    }
-                    if (targetHpf > 25.0f) {
-                        leftVal = v.hpfL.processSingleSampleRaw(leftVal);
-                        rightVal = v.hpfR.processSingleSampleRaw(rightVal);
-                    }
-
-                    float gain = vol * env * boundaryFade;
-
-                    buffer.addSample(0, s, leftVal * panL * gain);
-                    if (buffer.getNumChannels() > 1)
-                        buffer.addSample(1, s, rightVal * panR * gain);
-                }
-                else
-                {
-                    v.isActive = false;
-                    break;
-                }
-
-                v.currentPosition += v.pitchRatio;
             }
+
+            if (pos < 0.0 || pos >= (double)(numSamps - 1))
+            {
+                v.isActive = false;
+                continue;
+            }
+
+            int p1 = (int)pos;
+            int p2 = p1 + 1;
+            float frac = (float)(pos - (double)p1);
+
+            float leftVal = lPtr[p1] + frac * (lPtr[p2] - lPtr[p1]);
+            float rightVal = rPtr[p1] + frac * (rPtr[p2] - rPtr[p1]);
+
+            if (targetLpf < 19500.0f) {
+                leftVal = v.lpfL.processSingleSampleRaw(leftVal);
+                rightVal = v.lpfR.processSingleSampleRaw(rightVal);
+            }
+            if (targetHpf > 25.0f) {
+                leftVal = v.hpfL.processSingleSampleRaw(leftVal);
+                rightVal = v.hpfR.processSingleSampleRaw(rightVal);
+            }
+
+            float gain = vol * env * chokeFade * crossFadeIn * boundaryFade;
+            v.currentEffectiveGain = chokeFade;
+
+            buffer.addSample(0, s, leftVal * panL * gain);
+            if (buffer.getNumChannels() > 1)
+                buffer.addSample(1, s, rightVal * panR * gain);
+
+            v.currentPosition += v.pitchRatio;
         }
     }
 

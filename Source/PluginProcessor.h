@@ -113,8 +113,15 @@ struct ChopSampVoice {
     juce::IIRFilter hpfL, hpfR;
     float lastLpf = -1.0f;
     float lastHpf = -1.0f;
-    float chokeVol = 1.0f;
-    float chokeStep = 0.0f;
+
+    float chokeStartGain = 1.0f;
+    float chokeTotalSamples = 1.0f;
+    float chokeElapsedSamples = 0.0f;
+
+    float fadeInTotalSamples = 0.0f;
+    float fadeInElapsedSamples = 0.0f;
+
+    float currentEffectiveGain = 0.0f;
 };
 
 class ChopSampAudioProcessor  : public juce::AudioProcessor
