@@ -91,6 +91,7 @@ struct SampleData
 {
     juce::AudioBuffer<float> buffer;
     juce::String name = "Empty";
+    juce::String filePath = "";
     bool isLoaded = false;
     double sampleRate = 44100.0;
     int bitDepth = 16;

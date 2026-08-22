@@ -55,6 +55,7 @@ void ChopSampAudioProcessor::loadFile(const juce::String& path, int tabIndex)
             }
 
             samples[tabIndex].name = file.getFileNameWithoutExtension();
+            samples[tabIndex].filePath = file.getFullPathName();
             samples[tabIndex].sampleRate = reader->sampleRate;
             samples[tabIndex].bitDepth = (int)reader->bitsPerSample > 0 ? (int)reader->bitsPerSample : 16;
             samples[tabIndex].format = file.getFileExtension().toLowerCase();
@@ -90,6 +91,7 @@ void ChopSampAudioProcessor::stopRecording()
                 samples[currentTab].buffer.copyFrom(ch, 0, tempBuf, ch, 0, recSamps);
             }
             samples[currentTab].name = "Recorded Audio";
+            samples[currentTab].filePath = "";
             samples[currentTab].sampleRate = getSampleRate() > 0 ? getSampleRate() : 44100.0;
             samples[currentTab].bitDepth = 16;
             samples[currentTab].format = ".wav";
@@ -815,10 +817,254 @@ juce::AudioProcessorEditor* ChopSampAudioProcessor::createEditor()
 
 void ChopSampAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
+    juce::ValueTree state("ChopSampState");
+    state.setProperty("version", 1, nullptr);
+    state.setProperty("currentTab", currentTab.load(), nullptr);
+    state.setProperty("playThroughMode", playThroughMode.load(), nullptr);
+    state.setProperty("masterVolume", masterVolume.load(), nullptr);
+    state.setProperty("whiteKeysOnly", whiteKeysOnly.load(), nullptr);
+    state.setProperty("pitchBendRangeSemi", pitchBendRangeSemi.load(), nullptr);
+    state.setProperty("rootNote", rootNote.load(), nullptr);
+    state.setProperty("currentTheme", currentTheme.load(), nullptr);
+
+    juce::ValueTree tabsNode("Tabs");
+    {
+        const juce::ScopedLock sl (sampleLock);
+        for (int i = 0; i < MAX_SAMPLE_TABS; ++i)
+        {
+            const auto& sample = samples[i];
+            if (sample.isLoaded && sample.buffer.getNumSamples() > 0)
+            {
+                juce::ValueTree tabNode("Tab");
+                tabNode.setProperty("index", i, nullptr);
+                tabNode.setProperty("name", sample.name, nullptr);
+                tabNode.setProperty("filePath", sample.filePath, nullptr);
+                tabNode.setProperty("sampleRate", sample.sampleRate, nullptr);
+                tabNode.setProperty("bitDepth", sample.bitDepth, nullptr);
+                tabNode.setProperty("format", sample.format, nullptr);
+
+                // Serialize audio buffer as lossless WAV into a MemoryBlock
+                juce::MemoryBlock audioMem;
+                {
+                    juce::WavAudioFormat wavFormat;
+                    if (auto writer = std::unique_ptr<juce::AudioFormatWriter>(
+                            wavFormat.createWriterFor(new juce::MemoryOutputStream(audioMem, false),
+                                                      sample.sampleRate > 0 ? sample.sampleRate : 44100.0,
+                                                      (unsigned int)sample.buffer.getNumChannels(),
+                                                      sample.bitDepth > 0 ? sample.bitDepth : 16,
+                                                      {}, 0)))
+                    {
+                        writer->writeFromAudioSampleBuffer(sample.buffer, 0, sample.buffer.getNumSamples());
+                    }
+                }
+                tabNode.setProperty("audioData", audioMem, nullptr);
+
+                // Markers & per-slice parameters
+                juce::ValueTree markersNode("Markers");
+                for (const auto& m : sample.markers)
+                {
+                    juce::ValueTree mNode("Marker");
+                    mNode.setProperty("sampleIndex", m.sampleIndex, nullptr);
+                    mNode.setProperty("isSelected", m.isSelected, nullptr);
+                    mNode.setProperty("volume", m.params.volume, nullptr);
+                    mNode.setProperty("pan", m.params.pan, nullptr);
+                    mNode.setProperty("pitchSemi", m.params.pitchSemi, nullptr);
+                    mNode.setProperty("reverse", m.params.reverse, nullptr);
+                    mNode.setProperty("startTrimMs", m.params.startTrimMs, nullptr);
+                    mNode.setProperty("endTrimMs", m.params.endTrimMs, nullptr);
+                    mNode.setProperty("attackMs", m.params.attackMs, nullptr);
+                    mNode.setProperty("decayMs", m.params.decayMs, nullptr);
+                    mNode.setProperty("sustainLevel", m.params.sustainLevel, nullptr);
+                    mNode.setProperty("releaseMs", m.params.releaseMs, nullptr);
+                    mNode.setProperty("crossfadeMs", m.params.crossfadeMs, nullptr);
+                    mNode.setProperty("filterCutoff", m.params.filterCutoff, nullptr);
+                    mNode.setProperty("lpfCutoff", m.params.lpfCutoff, nullptr);
+                    mNode.setProperty("hpfCutoff", m.params.hpfCutoff, nullptr);
+                    mNode.setProperty("delayMix", m.params.delayMix, nullptr);
+                    mNode.setProperty("reverbMix", m.params.reverbMix, nullptr);
+                    mNode.setProperty("sliceName", m.params.sliceName, nullptr);
+                    mNode.setProperty("colorARGB", (juce::int64)m.params.colorARGB, nullptr);
+                    markersNode.appendChild(mNode, nullptr);
+                }
+                tabNode.appendChild(markersNode, nullptr);
+                tabsNode.appendChild(tabNode, nullptr);
+            }
+        }
+    }
+    state.appendChild(tabsNode, nullptr);
+
+    juce::MemoryOutputStream stream(destData, false);
+    state.writeToStream(stream);
 }
 
 void ChopSampAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+
+    juce::MemoryInputStream stream(data, static_cast<size_t>(sizeInBytes), false);
+    auto state = juce::ValueTree::readFromStream(stream);
+    if (!state.isValid() || !state.hasType("ChopSampState"))
+        return;
+
+    // 1. Restore global parameters
+    if (state.hasProperty("currentTab"))
+        currentTab = (int)state.getProperty("currentTab");
+    if (state.hasProperty("playThroughMode"))
+        playThroughMode = (bool)state.getProperty("playThroughMode");
+    if (state.hasProperty("masterVolume"))
+        masterVolume = (float)state.getProperty("masterVolume");
+    if (state.hasProperty("whiteKeysOnly"))
+        whiteKeysOnly = (bool)state.getProperty("whiteKeysOnly");
+    if (state.hasProperty("pitchBendRangeSemi"))
+        pitchBendRangeSemi = (float)state.getProperty("pitchBendRangeSemi");
+    if (state.hasProperty("rootNote"))
+        rootNote = (int)state.getProperty("rootNote");
+    if (state.hasProperty("currentTheme"))
+        currentTheme = (int)state.getProperty("currentTheme");
+
+    // 2. Restore samples and markers under lock
+    {
+        const juce::ScopedLock sl (sampleLock);
+        for (auto& v : voices) {
+            v.isActive = false;
+        }
+
+        for (int i = 0; i < MAX_SAMPLE_TABS; ++i) {
+            samples[i].isLoaded = false;
+            samples[i].buffer.setSize(0, 0);
+            samples[i].markers.clear();
+            samples[i].name = "Empty";
+            samples[i].filePath = "";
+        }
+
+        auto tabsNode = state.getChildWithName("Tabs");
+        if (tabsNode.isValid())
+        {
+            for (int t = 0; t < tabsNode.getNumChildren(); ++t)
+            {
+                auto tabNode = tabsNode.getChild(t);
+                if (tabNode.isValid() && tabNode.hasType("Tab"))
+                {
+                    int tabIndex = tabNode.getProperty("index", -1);
+                    if (tabIndex >= 0 && tabIndex < MAX_SAMPLE_TABS)
+                    {
+                        auto& sample = samples[tabIndex];
+                        sample.name = tabNode.getProperty("name", "Audio");
+                        sample.filePath = tabNode.getProperty("filePath", "");
+                        sample.sampleRate = tabNode.getProperty("sampleRate", 44100.0);
+                        sample.bitDepth = tabNode.getProperty("bitDepth", 16);
+                        sample.format = tabNode.getProperty("format", ".wav");
+
+                        bool bufferLoaded = false;
+
+                        // Check for embedded audioData MemoryBlock first
+                        if (tabNode.hasProperty("audioData"))
+                        {
+                            if (auto* mb = tabNode.getProperty("audioData").getBinaryData())
+                            {
+                                if (mb->getSize() > 0)
+                                {
+                                    auto memIn = std::make_unique<juce::MemoryInputStream>(*mb, false);
+                                    juce::WavAudioFormat wavFormat;
+                                    if (auto reader = std::unique_ptr<juce::AudioFormatReader>(wavFormat.createReaderFor(memIn.release(), true)))
+                                    {
+                                        int numChans = (int)reader->numChannels;
+                                        int numSamps = (int)reader->lengthInSamples;
+                                        if (numChans > 0 && numSamps > 0)
+                                        {
+                                            sample.buffer.setSize(numChans, numSamps);
+                                            reader->read(&sample.buffer, 0, numSamps, 0, true, numChans > 1);
+                                            bufferLoaded = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback: If audioData wasn't present or failed to read, try loading from filePath
+                        if (!bufferLoaded && sample.filePath.isNotEmpty())
+                        {
+                            juce::File file(sample.filePath);
+                            if (file.existsAsFile())
+                            {
+                                if (auto reader = std::unique_ptr<juce::AudioFormatReader>(formatManager.createReaderFor(file)))
+                                {
+                                    int numChans = (int)reader->numChannels;
+                                    int numSamps = (int)reader->lengthInSamples;
+                                    if (numChans > 0 && numSamps > 0)
+                                    {
+                                        sample.buffer.setSize(numChans, numSamps);
+                                        reader->read(&sample.buffer, 0, numSamps, 0, true, numChans > 1);
+                                        bufferLoaded = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (bufferLoaded)
+                        {
+                            sample.isLoaded = true;
+
+                            // Restore markers
+                            auto markersNode = tabNode.getChildWithName("Markers");
+                            if (markersNode.isValid())
+                            {
+                                std::vector<SliceMarker> loadedMarkers;
+                                for (int mIdx = 0; mIdx < markersNode.getNumChildren(); ++mIdx)
+                                {
+                                    auto mNode = markersNode.getChild(mIdx);
+                                    if (mNode.isValid() && mNode.hasType("Marker"))
+                                    {
+                                        SliceMarker sm;
+                                        sm.sampleIndex = mNode.getProperty("sampleIndex", 0);
+                                        sm.isSelected = mNode.getProperty("isSelected", false);
+                                        sm.params.volume = mNode.getProperty("volume", 1.0f);
+                                        sm.params.pan = mNode.getProperty("pan", 0.0f);
+                                        sm.params.pitchSemi = mNode.getProperty("pitchSemi", 0.0f);
+                                        sm.params.reverse = mNode.getProperty("reverse", false);
+                                        sm.params.startTrimMs = mNode.getProperty("startTrimMs", 0.0f);
+                                        sm.params.endTrimMs = mNode.getProperty("endTrimMs", 0.0f);
+                                        sm.params.attackMs = mNode.getProperty("attackMs", 10.0f);
+                                        sm.params.decayMs = mNode.getProperty("decayMs", 100.0f);
+                                        sm.params.sustainLevel = mNode.getProperty("sustainLevel", 1.0f);
+                                        sm.params.releaseMs = mNode.getProperty("releaseMs", 100.0f);
+                                        sm.params.crossfadeMs = mNode.getProperty("crossfadeMs", 20.0f);
+                                        sm.params.filterCutoff = mNode.getProperty("filterCutoff", 20000.0f);
+                                        sm.params.lpfCutoff = mNode.getProperty("lpfCutoff", 20000.0f);
+                                        sm.params.hpfCutoff = mNode.getProperty("hpfCutoff", 20.0f);
+                                        sm.params.delayMix = mNode.getProperty("delayMix", 0.0f);
+                                        sm.params.reverbMix = mNode.getProperty("reverbMix", 0.0f);
+                                        sm.params.sliceName = mNode.getProperty("sliceName", "");
+                                        sm.params.colorARGB = (juce::uint32)(juce::int64)mNode.getProperty("colorARGB", 0);
+                                        loadedMarkers.push_back(sm);
+                                    }
+                                }
+                                if (!loadedMarkers.empty()) {
+                                    sample.markers = std::move(loadedMarkers);
+                                } else {
+                                    sample.markers.push_back({ 0, false });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Notify Editor if open to refresh all UI components asynchronously on the message thread
+    if (auto* editor = getActiveEditor())
+    {
+        juce::Component::SafePointer<juce::AudioProcessorEditor> safeEditor(editor);
+        juce::MessageManager::callAsync([safeEditor]() {
+            if (safeEditor != nullptr)
+            {
+                if (auto* ed = dynamic_cast<ChopSampAudioProcessorEditor*>(safeEditor.getComponent()))
+                    ed->updateUIFromProcessorState();
+            }
+        });
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -138,6 +138,10 @@ SliceControlsComponent::SliceControlsComponent(ChopSampAudioProcessor& p)
 
 SliceControlsComponent::~SliceControlsComponent()
 {
+    if (pbRangeDropdownPtr) removeChildComponent(pbRangeDropdownPtr);
+    if (rootKeyDropdownPtr) removeChildComponent(rootKeyDropdownPtr);
+    pbRangeDropdownPtr = nullptr;
+    rootKeyDropdownPtr = nullptr;
 }
 
 void SliceControlsComponent::setDropdowns(juce::ComboBox* pbDropdown, juce::ComboBox* rootDropdown)

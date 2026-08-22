@@ -8,7 +8,6 @@ ChopSampAudioProcessorEditor::ChopSampAudioProcessorEditor (ChopSampAudioProcess
     setLookAndFeel(&customLookAndFeel);
     sliceControlsComponent.setLookAndFeel(&customLookAndFeel);
     waveformComponent.setLookAndFeel(&customLookAndFeel);
-    juce::LookAndFeel::setDefaultLookAndFeel(&customLookAndFeel);
     
     for (int i = 0; i < MAX_SAMPLE_TABS; ++i)
     {
@@ -303,16 +302,17 @@ ChopSampAudioProcessorEditor::ChopSampAudioProcessorEditor (ChopSampAudioProcess
     screwImage = juce::ImageCache::getFromMemory(BinaryData::skrew_png, BinaryData::skrew_pngSize);
 
     setSize (layoutConfig.windowW, layoutConfig.windowH);
+    updateUIFromProcessorState();
     startTimerHz(25);
 }
 
 ChopSampAudioProcessorEditor::~ChopSampAudioProcessorEditor()
 {
+    stopTimer();
+    tooltipWindow.hideTip();
     setLookAndFeel(nullptr);
     sliceControlsComponent.setLookAndFeel(nullptr);
     waveformComponent.setLookAndFeel(nullptr);
-    juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
-    stopTimer();
 }
 
 void ChopSampAudioProcessorEditor::paint (juce::Graphics& g)
@@ -544,6 +544,7 @@ bool ChopSampAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArr
 
 void ChopSampAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
+    juce::ignoreUnused(x, y);
     if (files.size() > 0)
     {
         juce::String cleanPath = files[0].unquoted().trim();
@@ -551,6 +552,51 @@ void ChopSampAudioProcessorEditor::filesDropped (const juce::StringArray& files,
             cleanPath = cleanPath.substring(0, cleanPath.length() - 9);
         }
         audioProcessor.loadFile(cleanPath, audioProcessor.currentTab);
+        waveformComponent.setSelectedSliceIndex(0);
+        sliceControlsComponent.setSelectedSliceIndex(0);
         waveformComponent.repaint();
+        sliceControlsComponent.repaint();
     }
+}
+
+void ChopSampAudioProcessorEditor::updateUIFromProcessorState()
+{
+    playbackModeDropdown.setSelectedId(audioProcessor.playThroughMode.load() ? 2 : 1, juce::dontSendNotification);
+
+    // Root Key Mapping
+    int root = audioProcessor.rootNote.load();
+    int rootId = 4; // default C3
+    if (root <= 12) rootId = 1;
+    else if (root <= 24) rootId = 2;
+    else if (root <= 36) rootId = 3;
+    else if (root <= 48) rootId = 4;
+    else rootId = 5;
+    rootKeyDropdown.setSelectedId(rootId, juce::dontSendNotification);
+
+    // Pitch Bend Range
+    float pb = audioProcessor.pitchBendRangeSemi.load();
+    int pbId = 1; // default +-2
+    if (pb <= 2.0f) pbId = 1;
+    else if (pb <= 7.0f) pbId = 2;
+    else if (pb <= 12.0f) pbId = 3;
+    else pbId = 4;
+    pbRangeDropdown.setSelectedId(pbId, juce::dontSendNotification);
+
+    masterVolSlider.setValue(audioProcessor.masterVolume.load(), juce::dontSendNotification);
+    keyMapButton.repaint();
+
+    int curTab = audioProcessor.currentTab.load();
+    if (curTab >= 0 && curTab < MAX_SAMPLE_TABS) {
+        if (!audioProcessor.samples[curTab].markers.empty()) {
+            waveformComponent.setSelectedSliceIndex(0);
+            sliceControlsComponent.setSelectedSliceIndex(0);
+        } else {
+            waveformComponent.setSelectedSliceIndex(-1);
+            sliceControlsComponent.setSelectedSliceIndex(-1);
+        }
+    }
+
+    waveformComponent.repaint();
+    sliceControlsComponent.repaint();
+    repaint();
 }
