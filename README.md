@@ -135,5 +135,5 @@ See the [LICENSE](LICENSE) file for full details.
 
 ## 👨‍💻 Author & Acknowledgements
 
-Created with ❤️ by **Ankur Rabha**.  
+Created with AI 🤖 by **Ankur Rabha**.  
 Built with the [JUCE Framework](https://juce.com/).
