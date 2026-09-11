@@ -1,6 +1,7 @@
-<div align="center">
 
-<img src="Assets/banner.jpg" alt="ChopSamp by Ankur" width="300"/>
+<div align="center">
+ <img src="Assets/banner.jpg" alt="ChopSamp by Ankur" width="300"/>
+</div>
 
 # ChopSamp
 ### *Tactile Hardware-Inspired Sampler & Slicer Audio Plugin*
@@ -29,8 +30,7 @@
 ## 🎨 User Interface
 
 <div align="center">
-  <img src="Assets/screenshot.png" alt="ChopSamp Interface Screenshot" width="100%"/>
-  
+  <img src="Assets/screenshot.png" alt="ChopSamp Interface Screenshot" width="100%"/>  
 </div>
 
 ---
@@ -63,9 +63,10 @@
 
 ## 🎬 Tutorial Video
 
-<div align="center">
-  <iframe width="560" height="315" src="https://www.youtube.com/embed/S2ynVZKj3S8?si=DGew_8wHRS9mVrWV" title="ChopSamp - How to Use Tutorial" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-</div>
+<a target="_blank" href="https://youtu.be/S2ynVZKj3S8?si=BS77mn2c0jE3OimV">
+ <img width="1920" height="1080" alt="Thumbnial" src="https://github.com/user-attachments/assets/1e086854-c4e0-48ef-9876-0b34f9d033a0" />
+</a>
+
 
 ---
 
